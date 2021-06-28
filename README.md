@@ -1,6 +1,6 @@
 # btc-node
 
-##API
+## API
 
 **/user/create**
 Allows to create a new user by sending a User-type object, containing fields 'name' and 'password.
