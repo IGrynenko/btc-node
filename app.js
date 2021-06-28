@@ -1,33 +1,26 @@
 const express = require('express');
 const csv = require('csv-parser');
 const fs = require('fs');
+const https = require('https');
 const uuid = require('uuid');
 const jwt = require('jsonwebtoken');
+const config = require('./config');
+const User = require('./user');
 
 const app = express();
 const jsonParser = express.json();
 const createCsvWriter = require('csv-writer').createObjectCsvWriter;
 
-// separate
-const usersPath = 'D:\\BTC\\Users123.csv';
 const csvWriter = createCsvWriter({
-    path: usersPath,
-    header: [
-        { id: 'id', title: 'Id' },
-        { id: 'name', title: 'Name' },
-        { id: 'password', title: 'Password' },
-        { id: 'created', title: 'Created' },
-    ],
+    path: config.tables.users.usersPath,
+    header: config.tables.users.headers,
     append: true
 });
-const tokenKey = '1a2b-3c4d-5e6f-7g8h'
-//--------
 
-//move to routers ?
 app.get('/api/users', (req, res) => {
 
-    let users = []; //add User module // separate method
-    fs.createReadStream(usersPath)
+    let users = [];
+    fs.createReadStream(config.tables.users.usersPath)
     .pipe(csv())
     .on('data', (row) => {
         users.push(row);
@@ -47,26 +40,19 @@ app.post('/api/create', jsonParser, (req, res) => {
 
     if (name && pass) {
 
-        let users = []; //add User module // separate method
-        fs.createReadStream(usersPath)
+        let users = [];
+        fs.createReadStream(config.tables.users.usersPath)
         .pipe(csv())
-        .on('data', (row) => {
+        .on('data', (row) => {          
             users.push(row);
         })
         .on('end', async () => {
-            if (users.some(e => e.Name === name)) {
-                
+
+            if (users.some(e => e.Name === name)) {                
                 res.status(400).send("User with such name exists");
             }
             else {
-                // User obj
-                const user = {
-                    id: uuid.v4(),
-                    name: name,
-                    password: pass,
-                    created: Date.now()
-                };
-
+                const user = new User(uuid.v4(), name, pass, Date.now());
                 await csvWriter.writeRecords([user]);
                 res.send(user.id);
             }
@@ -86,20 +72,21 @@ app.post('/api/login', jsonParser, (req, res) => {
 
     if (name && pass) {
 
-        let users = []; //add User module // separate method
-        fs.createReadStream(usersPath)
+        let users = [];
+        fs.createReadStream(config.tables.users.usersPath)
         .pipe(csv())
-        .on('data', (row) => {
+        .on('data', (row) => {                      
             users.push(row);
         })
-        .on('end', async () => {
+        .on('end', () => {
+
             const user = users.find(e => e.Name === name && e.Password === pass);
 
             if (user) {
                 const response = {
                     id: user.Id,
                     name: user.Name,
-                    token: jwt.sign({ id: user.id }, tokenKey)
+                    token: jwt.sign({ id: user.id }, config.tokenKey)
                 };
                 res.status(200).send(response);
             }
@@ -111,4 +98,57 @@ app.post('/api/login', jsonParser, (req, res) => {
         res.status(400).send("Wrong data");
 });
 
-app.listen(3000);
+app.get('/api/btcRate', (req, res) => {
+
+    const authHeader = req.headers.authorization;
+
+    if (authHeader) {
+        jwt.verify(
+            authHeader.split(' ')[1],
+            config.tokenKey,
+            (error, decoded) => {
+
+                if (error)
+                    res.status(400).send('Invalid token');
+
+                if (decoded) {
+
+                    const options = {
+                        method: 'GET',
+                        hostname: 'rest.coinapi.io',
+                        path: '/v1/exchangerate/BTC/UAH',
+                        headers: {'X-CoinAPI-Key': '36841ECC-2E4A-41ED-92BE-68372717978D'}
+                    };
+                    
+                    const coinReq = https.request(options, (coinRes) => {
+                        
+                        let chunks = [];
+
+                        coinRes.on('data', (d) => {
+                            chunks.push(d);
+                        });
+
+                        coinRes.on('end', () => {
+                            if (coinRes.statusCode != 200) {
+                                res.status(500).send('There might be an issue with coinapi.io');
+                              } else {
+                                  const info = JSON.parse(chunks.toString());
+                                  res.send(`BTC rate: ${info['rate']}`);
+                              }
+                        });
+                    });
+
+                    coinReq.on('error', (e) => {
+                        console.error(e);
+                    });
+                    coinReq.end();
+                }
+            }
+        )
+    }
+    else
+        res.status(401).send();
+})
+
+app.listen(config.port, config.host, () =>
+console.log(`Server listens to http://${config.host}:${config.port}`));
